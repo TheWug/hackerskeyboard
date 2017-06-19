@@ -35,7 +35,7 @@ interface ComposeSequencing {
 
 public class ComposeSequence {
     private static final String TAG = "HK/ComposeSequence";
-    
+
     protected static final Map<String, String> mMap =
     	new HashMap<String, String>();
 
@@ -113,6 +113,8 @@ public class ComposeSequence {
             return null;
         }
         //Log.i(TAG, "ComposeBase get, key=" + showString(key) + " result=" + mMap.get(key));
+        String unicodeChar = getUnicode(key);
+        if (unicodeChar != null) return unicodeChar;
         return mMap.get(key);
     }
 
@@ -132,7 +134,7 @@ public class ComposeSequence {
         if (partialKey == null || partialKey.length() == 0) {
             return false;
         }
-        return mPrefixes.contains(partialKey);
+        return mPrefixes.contains(partialKey) || isUnicodePartial(partialKey);
     }
 
     protected static String format(String seq) {
@@ -171,6 +173,8 @@ public class ComposeSequence {
             Log.w(TAG, "compose sequence is a duplicate: " + format(key));
         else if (mPrefixes.contains(key))
             Log.w(TAG, "compose sequence is a subset: " + format(key));
+        else if (isUnicodePartial(key))
+            Log.w(TAG, "compose sequence conflicts with unicode: " + format(key));
 
         mMap.put(key, value);
     	for (int i = 1; i < key.length(); ++i) {
@@ -181,6 +185,57 @@ public class ComposeSequence {
 
         if (found)
             Log.w(TAG, "compose sequence is a superset: " + format(key));
+    }
+
+    private static void isHexDigit(char c) {
+    return (c >= '0' && c <= '9') ||
+           (c >= 'a' && c <= 'f') ||
+           (c >= 'A' && c <= 'F');
+    }
+
+    // Check for a valid, though possibly truncated, unicode compose of the form
+    // 'u+X.' (X is up to 6 hexadecimal digits, and the trailing period is included)
+    protected static bool isUnicodePartial(CharSequence str) {
+        switch (str.length()) {
+        default:
+            if (str.length() > 9) return false;
+            for (int i = 2; i < str.length() - 1; ++i) {
+                if (!isHexDigit(str.charAt(i))) return false;
+            }
+            if (str.length() > 3 &&
+                str.charAt(str.length() - 1) != '.' &&
+                !Character.isHexDigit(str.charAt(str.length() - 1)) return false;
+        case 2:
+            if (str.charAt(1) != '+') return false;
+        case 1:
+            if (Character.toLowerCase(str.charAt(0)) != 'u') return false;
+        case 0:
+        }
+
+        return true;
+    }
+
+    // return the string representation of a valid, complete unicode compose sequence.
+    // returns null if the input is malformed, or if the requested codepoint is invalid.
+    protected static String getUnicode(CharSequence str) {
+        if ((str.length() > 9) ||
+            (str.length() < 4) ||
+            (Character.toLowerCase(str.charAt(0)) != 'u') ||
+            (str.charAt(1) != '+') ||
+            (str.charAt(str.length() - 1) != '.')) return null;
+        CharSequence digits = str.subsequence(2, str.length() - 1);
+        int codepoint = 0;
+        try {
+            codepoint = Integer.parseInt(digits, 16);
+            if (Character.isDefined(codepoint)) {
+                return new String(Character.toChars(codepoint));
+            } else {
+                return "\uFFFD"; // return the unicode replacement character for invalid codepoints
+            }
+
+        } catch (NumberFormatException e) {} // malformed input, do nothing.
+
+        return null;
     }
 
     protected StringBuilder composeBuffer = new StringBuilder(10);
@@ -204,7 +259,9 @@ public class ComposeSequence {
     	//Log.i(TAG, "bufferKey code=" + (int) code + " => " + showString(composeBuffer.toString()));
     }
 
-    // returns true if the compose sequence is valid but incomplete
+    // Returns a compose substitution, if a matching one is found.
+    // otherwise, returns the empty string if no match is possible,
+    // and returns null if there is a valid but incomplete match.
     public String executeToString(int code) {
         KeyboardSwitcher ks = KeyboardSwitcher.getInstance();
         if (ks.getInputView().isShiftCaps()
